@@ -5,6 +5,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+if not hasattr(np, "float_"):   np.float_   = np.float64
+if not hasattr(np, "complex_"): np.complex_ = np.complex128
+if not hasattr(np, "int_"):     np.int_     = np.int64
 from prophet import Prophet
 from prophet.plot import plot_plotly, plot_components_plotly
 import plotly.express as px
