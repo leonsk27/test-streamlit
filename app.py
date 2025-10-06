@@ -3,11 +3,13 @@ import os
 from pathlib import Path
 import streamlit as st
 import pandas as pd
-import numpy as np
 from io import BytesIO
+import numpy as np
+# Compat con NumPy 2.x para Prophet (debe ir ANTES del import de prophet)
 if not hasattr(np, "float_"):   np.float_   = np.float64
 if not hasattr(np, "complex_"): np.complex_ = np.complex128
 if not hasattr(np, "int_"):     np.int_     = np.int64
+
 from prophet import Prophet
 from prophet.plot import plot_plotly, plot_components_plotly
 import plotly.express as px
@@ -65,7 +67,7 @@ def pick_col(df, candidates):
 
 # Preferimos encabezados "bonitos" si ya usaste el preprocesador
 date_col  = pick_col(df_raw, ("fecha_venta","fecha","date","ds"))
-value_col = pick_col(df_raw, ("ventas","y","venta","monto","recaudacion","cantidad","valor"))
+value_col = pick_col(df_raw, ("ventas","y","venta","monto","cantidad","valor"))
 
 if date_col is None or value_col is None:
     st.error("No pude detectar columnas de fecha/ventas. Esperaba `fecha_venta`/`ventas` o `ds`/`y`.")
@@ -108,13 +110,6 @@ if growth_type == "logistic":
     df_train["cap"] = cap_val
     df_train["floor"] = 0.0
 
-m = Prophet(
-    yearly_seasonality=yearly_season,
-    weekly_seasonality=weekly_season,
-    daily_seasonality=False,
-    growth=growth_type,
-    changepoint_prior_scale=chagepoint_scale if 'chagepoint_scale' in locals() else 0.2 # solo para evitar lint
-)
 # constructor correcto (con tu slider):
 m = Prophet(
     yearly_seasonality=yearly_season,
@@ -185,101 +180,101 @@ st.plotly_chart(fig_month, use_container_width=True)
 
 st.caption("Servido bajo subruta /grafica si configuras baseUrlPath en .streamlit/config.toml")
 
-# ====== Predicciones adicionales (Categoría + Recaudación) ===================
-st.markdown("## 🔮 Predicciones adicionales")
+# ---------- Predicciones adicionales ----------
+st.markdown("---")
+st.header("🔮 Predicciones adicionales")
 
-# Reutilizamos pick_col, date_col, value_col, df_raw, y opciones ya definidas
-cat_col  = pick_col(df_raw, ("categoria_nombre","categoria","categoria_id","category"))
-prod_col = pick_col(df_raw, ("producto_nombre","producto","producto_id","product"))  # por si luego quieres usarlo
-rev_col  = pick_col(df_raw, ("recaudacion","ingresos","importe","total","revenue","sales_amount"))
-price_col = pick_col(df_raw, ("precio_unitario","precio","price","unit_price"))
+# Utilidad: entrena y grafica una serie ya en formato (ds,y)
+def fit_and_plot(title: str, series_df: pd.DataFrame, key_suffix: str = ""):
+    df_tr = series_df.copy()
 
-# Construye una serie diaria sumada (opcionalmente por grupo) a partir de df_raw
-def build_series(dfg: pd.DataFrame, value_name: str, group_col: str | None = None, group_val=None) -> pd.DataFrame:
-    d = dfg.copy()
-    # normaliza nombres para prophet
-    d = d.rename(columns={date_col: "ds", value_name: "y"})
-    d["ds"] = pd.to_datetime(d["ds"], errors="coerce")
-    d["y"]  = pd.to_numeric(d["y"], errors="coerce")
-    d = d.dropna(subset=["ds","y"])
-    if group_col is not None and group_val is not None and group_col in d.columns:
-        d = d[d[group_col] == group_val]
-    # agregamos por día
-    d = d.groupby(d["ds"].dt.normalize(), as_index=False)["y"].sum().sort_values("ds")
-    if fill_missing_as_zero and len(d) > 0:
-        full_idx = pd.date_range(d["ds"].min(), d["ds"].max(), freq="D")
-        d = d.set_index("ds").reindex(full_idx)
-        d.index.name = "ds"
-        d["y"] = d["y"].fillna(0.0)
-        d = d.reset_index()
-    return d
-
-# Entrena Prophet y muestra 2 gráficos + descarga para una serie
-def fit_and_plot(title: str, series_df: pd.DataFrame, key_suffix: str):
-    if len(series_df) < 10:
-        st.warning(f"Serie demasiado corta para: {title}")
-        return
-
-    df_train = series_df.copy()
     if growth_type == "logistic":
-        cap_val = max(1.0, float(np.percentile(df_train["y"], 95) * 1.3))
-        df_train["cap"] = cap_val
-        df_train["floor"] = 0.0
+        cap_val = max(1.0, float(np.percentile(df_tr["y"], 95) * 1.3))
+        df_tr["cap"] = cap_val
+        df_tr["floor"] = 0.0
 
-    m_extra = Prophet(
+    model = Prophet(
         yearly_seasonality=yearly_season,
         weekly_seasonality=weekly_season,
         daily_seasonality=False,
         growth=growth_type,
-        changepoint_prior_scale=changepoint_scale
+        changepoint_prior_scale=changepoint_scale,
     )
-    m_extra.fit(df_train[["ds","y"] + (["cap","floor"] if growth_type == "logistic" else [])])
+    model.fit(df_tr[["ds", "y"] + (["cap", "floor"] if growth_type == "logistic" else [])])
 
-    future = m_extra.make_future_dataframe(periods=horizon_days, freq="D", include_history=True)
+    future = model.make_future_dataframe(periods=horizon_days, freq="D", include_history=True)
     if growth_type == "logistic":
-        future["cap"] = df_train["cap"].iloc[-1]
+        future["cap"] = df_tr["cap"].iloc[-1]
         future["floor"] = 0.0
-    forecast_extra = m_extra.predict(future)
+
+    fc = model.predict(future)
 
     st.subheader(title)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.caption("Pronóstico")
-        st.plotly_chart(plot_plotly(m_extra, forecast_extra), use_container_width=True, key=f"plot_{key_suffix}")
-    with c2:
-        st.caption("Componentes")
-        st.plotly_chart(plot_components_plotly(m_extra, forecast_extra), use_container_width=True, key=f"comp_{key_suffix}")
-
-    export = forecast_extra.rename(columns={"ds":"fecha_venta","yhat":"pronostico","yhat_lower":"lim_inf","yhat_upper":"lim_sup"})
-    st.download_button(
-        f"⬇️ Descargar pronóstico ({title})",
-        data=export.to_csv(index=False).encode("utf-8"),
-        file_name=f"pronostico_{key_suffix}.csv",
-        mime="text/csv",
-        key=f"dl_{key_suffix}"
-    )
+    st.plotly_chart(plot_plotly(model, fc), use_container_width=True, key=f"fcast_{key_suffix}")
+    with st.expander("Componentes", expanded=False):
+        st.plotly_chart(plot_components_plotly(model, fc), use_container_width=True, key=f"comp_{key_suffix}")
 
 # ---------- 1) Predicción por CATEGORÍA ----------
+cat_col = pick_col(df_raw, ("categoria_nombre","categoria","categoria_id","category","cat"))
 if cat_col:
-    st.markdown("### Por categoría")
-    categorias = sorted(pd.Series(df_raw[cat_col].dropna().unique()).astype(str).tolist())
-    sel = st.multiselect("Elige categorías (recomendado ≤ 5)", categorias, default=categorias[:1])
-    if len(sel) > 7:
-        st.info("Has seleccionado muchas categorías; el entrenamiento puede tardar.")
-    for i, c in enumerate(sel):
-        serie_cat = build_series(df_raw, value_col, group_col=cat_col, group_val=c)
-        fit_and_plot(f"Categoría: {c}", serie_cat, key_suffix=f"cat_{i}_{c}")
+    # metadatos de categoría por fecha normalizada
+    meta_cat = df_raw[[date_col, cat_col]].copy()
+    meta_cat[date_col] = pd.to_datetime(meta_cat[date_col], errors="coerce").dt.normalize()
+    meta_cat = meta_cat.dropna(subset=[date_col])
+
+    categorias = sorted(meta_cat[cat_col].astype(str).unique().tolist())
+    sel_cats = st.multiselect(
+        "Categorías a modelar", categorias, default=categorias[: min(3, len(categorias))]
+    )
+
+    if sel_cats:
+        # Aseguramos que df (histórico) también esté normalizado al unir
+        df_norm = df.copy()
+        df_norm["ds"] = pd.to_datetime(df_norm["ds"]).dt.normalize()
+
+        df_join = df_norm.merge(meta_cat.rename(columns={date_col: "ds"}), on="ds", how="left")
+
+        for i, c in enumerate(sel_cats):
+            serie_cat = df_join[df_join[cat_col].astype(str) == str(c)][["ds", "y"]]
+            serie_cat = (
+                serie_cat.groupby("ds", as_index=False)["y"].sum().sort_values("ds")
+            )
+            if fill_missing_as_zero and len(serie_cat) > 0:
+                full_idx = pd.date_range(serie_cat["ds"].min(), serie_cat["ds"].max(), freq="D")
+                serie_cat = (
+                    serie_cat.set_index("ds")
+                    .reindex(full_idx)
+                    .rename_axis("ds")
+                    .fillna({"y": 0.0})
+                    .reset_index()
+                )
+            fit_and_plot(f"Categoría: {c}", serie_cat, key_suffix=f"cat_{i}")
 
 # ---------- 2) Predicción de RECAUDACIÓN (ingresos) TOTAL ----------
-st.markdown("### Recaudación total")
-if not rev_col and price_col:
-    # si no hay columna de recaudación, la calculamos como y * precio_unitario
-    df_raw["_tmp_recaudacion_calc"] = pd.to_numeric(df_raw[value_col], errors="coerce") * pd.to_numeric(df_raw[price_col], errors="coerce")
-    rev_col = "_tmp_recaudacion_calc"
+rev_col = pick_col(df_raw, ("recaudacion", "ingresos", "revenue", "importe", "total"))
+if not rev_col:
+    price_col = pick_col(df_raw, ("precio_unitario","precio","price","unit_price"))
+    if price_col:
+        df_raw["_revenue_calc"] = pd.to_numeric(df_raw[value_col], errors="coerce") * pd.to_numeric(df_raw[price_col], errors="coerce")
+        rev_col = "_revenue_calc"
 
 if rev_col:
-    serie_rev = build_series(df_raw, rev_col)
-    fit_and_plot("Recaudación total", serie_rev, key_suffix="recaudacion_total")
+    rec = df_raw[[date_col, rev_col]].rename(columns={date_col: "ds", rev_col: "y"})
+    rec["ds"] = pd.to_datetime(rec["ds"], errors="coerce").dt.normalize()
+    rec["y"] = pd.to_numeric(rec["y"], errors="coerce")
+    rec = rec.dropna(subset=["ds", "y"]).sort_values("ds")
+    rec = rec.groupby("ds", as_index=False)["y"].sum()
+
+    if fill_missing_as_zero and len(rec) > 0:
+        full_idx = pd.date_range(rec["ds"].min(), rec["ds"].max(), freq="D")
+        rec = (
+            rec.set_index("ds")
+            .reindex(full_idx)
+            .rename_axis("ds")
+            .fillna({"y": 0.0})
+            .reset_index()
+        )
+    fit_and_plot("Recaudación total", rec, key_suffix="revenue")
 else:
-    st.info("No se encontró columna de recaudación ni precio unitario para calcularla.")
-# =====================================================================
+    st.info("No se encontró columna de recaudación ni precio para calcularla.")
+
