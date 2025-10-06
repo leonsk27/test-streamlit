@@ -180,101 +180,101 @@ st.plotly_chart(fig_month, use_container_width=True)
 
 st.caption("Servido bajo subruta /grafica si configuras baseUrlPath en .streamlit/config.toml")
 
-# ---------- Predicciones adicionales ----------
-st.markdown("---")
-st.header("🔮 Predicciones adicionales")
+# # ---------- Predicciones adicionales ----------
+# st.markdown("---")
+# st.header("🔮 Predicciones adicionales")
 
-# Utilidad: entrena y grafica una serie ya en formato (ds,y)
-def fit_and_plot(title: str, series_df: pd.DataFrame, key_suffix: str = ""):
-    df_tr = series_df.copy()
+# # Utilidad: entrena y grafica una serie ya en formato (ds,y)
+# def fit_and_plot(title: str, series_df: pd.DataFrame, key_suffix: str = ""):
+#     df_tr = series_df.copy()
 
-    if growth_type == "logistic":
-        cap_val = max(1.0, float(np.percentile(df_tr["y"], 95) * 1.3))
-        df_tr["cap"] = cap_val
-        df_tr["floor"] = 0.0
+#     if growth_type == "logistic":
+#         cap_val = max(1.0, float(np.percentile(df_tr["y"], 95) * 1.3))
+#         df_tr["cap"] = cap_val
+#         df_tr["floor"] = 0.0
 
-    model = Prophet(
-        yearly_seasonality=yearly_season,
-        weekly_seasonality=weekly_season,
-        daily_seasonality=False,
-        growth=growth_type,
-        changepoint_prior_scale=changepoint_scale,
-    )
-    model.fit(df_tr[["ds", "y"] + (["cap", "floor"] if growth_type == "logistic" else [])])
+#     model = Prophet(
+#         yearly_seasonality=yearly_season,
+#         weekly_seasonality=weekly_season,
+#         daily_seasonality=False,
+#         growth=growth_type,
+#         changepoint_prior_scale=changepoint_scale,
+#     )
+#     model.fit(df_tr[["ds", "y"] + (["cap", "floor"] if growth_type == "logistic" else [])])
 
-    future = model.make_future_dataframe(periods=horizon_days, freq="D", include_history=True)
-    if growth_type == "logistic":
-        future["cap"] = df_tr["cap"].iloc[-1]
-        future["floor"] = 0.0
+#     future = model.make_future_dataframe(periods=horizon_days, freq="D", include_history=True)
+#     if growth_type == "logistic":
+#         future["cap"] = df_tr["cap"].iloc[-1]
+#         future["floor"] = 0.0
 
-    fc = model.predict(future)
+#     fc = model.predict(future)
 
-    st.subheader(title)
-    st.plotly_chart(plot_plotly(model, fc), use_container_width=True, key=f"fcast_{key_suffix}")
-    with st.expander("Componentes", expanded=False):
-        st.plotly_chart(plot_components_plotly(model, fc), use_container_width=True, key=f"comp_{key_suffix}")
+#     st.subheader(title)
+#     st.plotly_chart(plot_plotly(model, fc), use_container_width=True, key=f"fcast_{key_suffix}")
+#     with st.expander("Componentes", expanded=False):
+#         st.plotly_chart(plot_components_plotly(model, fc), use_container_width=True, key=f"comp_{key_suffix}")
 
-# ---------- 1) Predicción por CATEGORÍA ----------
-cat_col = pick_col(df_raw, ("categoria_nombre","categoria","categoria_id","category","cat"))
-if cat_col:
-    # metadatos de categoría por fecha normalizada
-    meta_cat = df_raw[[date_col, cat_col]].copy()
-    meta_cat[date_col] = pd.to_datetime(meta_cat[date_col], errors="coerce").dt.normalize()
-    meta_cat = meta_cat.dropna(subset=[date_col])
+# # ---------- 1) Predicción por CATEGORÍA ----------
+# cat_col = pick_col(df_raw, ("categoria_nombre","categoria","categoria_id","category","cat"))
+# if cat_col:
+#     # metadatos de categoría por fecha normalizada
+#     meta_cat = df_raw[[date_col, cat_col]].copy()
+#     meta_cat[date_col] = pd.to_datetime(meta_cat[date_col], errors="coerce").dt.normalize()
+#     meta_cat = meta_cat.dropna(subset=[date_col])
 
-    categorias = sorted(meta_cat[cat_col].astype(str).unique().tolist())
-    sel_cats = st.multiselect(
-        "Categorías a modelar", categorias, default=categorias[: min(3, len(categorias))]
-    )
+#     categorias = sorted(meta_cat[cat_col].astype(str).unique().tolist())
+#     sel_cats = st.multiselect(
+#         "Categorías a modelar", categorias, default=categorias[: min(3, len(categorias))]
+#     )
 
-    if sel_cats:
-        # Aseguramos que df (histórico) también esté normalizado al unir
-        df_norm = df.copy()
-        df_norm["ds"] = pd.to_datetime(df_norm["ds"]).dt.normalize()
+#     if sel_cats:
+#         # Aseguramos que df (histórico) también esté normalizado al unir
+#         df_norm = df.copy()
+#         df_norm["ds"] = pd.to_datetime(df_norm["ds"]).dt.normalize()
 
-        df_join = df_norm.merge(meta_cat.rename(columns={date_col: "ds"}), on="ds", how="left")
+#         df_join = df_norm.merge(meta_cat.rename(columns={date_col: "ds"}), on="ds", how="left")
 
-        for i, c in enumerate(sel_cats):
-            serie_cat = df_join[df_join[cat_col].astype(str) == str(c)][["ds", "y"]]
-            serie_cat = (
-                serie_cat.groupby("ds", as_index=False)["y"].sum().sort_values("ds")
-            )
-            if fill_missing_as_zero and len(serie_cat) > 0:
-                full_idx = pd.date_range(serie_cat["ds"].min(), serie_cat["ds"].max(), freq="D")
-                serie_cat = (
-                    serie_cat.set_index("ds")
-                    .reindex(full_idx)
-                    .rename_axis("ds")
-                    .fillna({"y": 0.0})
-                    .reset_index()
-                )
-            fit_and_plot(f"Categoría: {c}", serie_cat, key_suffix=f"cat_{i}")
+#         for i, c in enumerate(sel_cats):
+#             serie_cat = df_join[df_join[cat_col].astype(str) == str(c)][["ds", "y"]]
+#             serie_cat = (
+#                 serie_cat.groupby("ds", as_index=False)["y"].sum().sort_values("ds")
+#             )
+#             if fill_missing_as_zero and len(serie_cat) > 0:
+#                 full_idx = pd.date_range(serie_cat["ds"].min(), serie_cat["ds"].max(), freq="D")
+#                 serie_cat = (
+#                     serie_cat.set_index("ds")
+#                     .reindex(full_idx)
+#                     .rename_axis("ds")
+#                     .fillna({"y": 0.0})
+#                     .reset_index()
+#                 )
+#             fit_and_plot(f"Categoría: {c}", serie_cat, key_suffix=f"cat_{i}")
 
-# ---------- 2) Predicción de RECAUDACIÓN (ingresos) TOTAL ----------
-rev_col = pick_col(df_raw, ("recaudacion", "ingresos", "revenue", "importe", "total"))
-if not rev_col:
-    price_col = pick_col(df_raw, ("precio_unitario","precio","price","unit_price"))
-    if price_col:
-        df_raw["_revenue_calc"] = pd.to_numeric(df_raw[value_col], errors="coerce") * pd.to_numeric(df_raw[price_col], errors="coerce")
-        rev_col = "_revenue_calc"
+# # ---------- 2) Predicción de RECAUDACIÓN (ingresos) TOTAL ----------
+# rev_col = pick_col(df_raw, ("recaudacion", "ingresos", "revenue", "importe", "total"))
+# if not rev_col:
+#     price_col = pick_col(df_raw, ("precio_unitario","precio","price","unit_price"))
+#     if price_col:
+#         df_raw["_revenue_calc"] = pd.to_numeric(df_raw[value_col], errors="coerce") * pd.to_numeric(df_raw[price_col], errors="coerce")
+#         rev_col = "_revenue_calc"
 
-if rev_col:
-    rec = df_raw[[date_col, rev_col]].rename(columns={date_col: "ds", rev_col: "y"})
-    rec["ds"] = pd.to_datetime(rec["ds"], errors="coerce").dt.normalize()
-    rec["y"] = pd.to_numeric(rec["y"], errors="coerce")
-    rec = rec.dropna(subset=["ds", "y"]).sort_values("ds")
-    rec = rec.groupby("ds", as_index=False)["y"].sum()
+# if rev_col:
+#     rec = df_raw[[date_col, rev_col]].rename(columns={date_col: "ds", rev_col: "y"})
+#     rec["ds"] = pd.to_datetime(rec["ds"], errors="coerce").dt.normalize()
+#     rec["y"] = pd.to_numeric(rec["y"], errors="coerce")
+#     rec = rec.dropna(subset=["ds", "y"]).sort_values("ds")
+#     rec = rec.groupby("ds", as_index=False)["y"].sum()
 
-    if fill_missing_as_zero and len(rec) > 0:
-        full_idx = pd.date_range(rec["ds"].min(), rec["ds"].max(), freq="D")
-        rec = (
-            rec.set_index("ds")
-            .reindex(full_idx)
-            .rename_axis("ds")
-            .fillna({"y": 0.0})
-            .reset_index()
-        )
-    fit_and_plot("Recaudación total", rec, key_suffix="revenue")
-else:
-    st.info("No se encontró columna de recaudación ni precio para calcularla.")
+#     if fill_missing_as_zero and len(rec) > 0:
+#         full_idx = pd.date_range(rec["ds"].min(), rec["ds"].max(), freq="D")
+#         rec = (
+#             rec.set_index("ds")
+#             .reindex(full_idx)
+#             .rename_axis("ds")
+#             .fillna({"y": 0.0})
+#             .reset_index()
+#         )
+#     fit_and_plot("Recaudación total", rec, key_suffix="revenue")
+# else:
+#     st.info("No se encontró columna de recaudación ni precio para calcularla.")
 
