@@ -184,3 +184,102 @@ fig_month = px.line(pred_m, x="ds", y="pronostico_mensual", title="Pronóstico m
 st.plotly_chart(fig_month, use_container_width=True)
 
 st.caption("Servido bajo subruta /grafica si configuras baseUrlPath en .streamlit/config.toml")
+
+# ====== Predicciones adicionales (Categoría + Recaudación) ===================
+st.markdown("## 🔮 Predicciones adicionales")
+
+# Reutilizamos pick_col, date_col, value_col, df_raw, y opciones ya definidas
+cat_col  = pick_col(df_raw, ("categoria_nombre","categoria","categoria_id","category"))
+prod_col = pick_col(df_raw, ("producto_nombre","producto","producto_id","product"))  # por si luego quieres usarlo
+rev_col  = pick_col(df_raw, ("recaudacion","ingresos","importe","total","revenue","sales_amount"))
+price_col = pick_col(df_raw, ("precio_unitario","precio","price","unit_price"))
+
+# Construye una serie diaria sumada (opcionalmente por grupo) a partir de df_raw
+def build_series(dfg: pd.DataFrame, value_name: str, group_col: str | None = None, group_val=None) -> pd.DataFrame:
+    d = dfg.copy()
+    # normaliza nombres para prophet
+    d = d.rename(columns={date_col: "ds", value_name: "y"})
+    d["ds"] = pd.to_datetime(d["ds"], errors="coerce")
+    d["y"]  = pd.to_numeric(d["y"], errors="coerce")
+    d = d.dropna(subset=["ds","y"])
+    if group_col is not None and group_val is not None and group_col in d.columns:
+        d = d[d[group_col] == group_val]
+    # agregamos por día
+    d = d.groupby(d["ds"].dt.normalize(), as_index=False)["y"].sum().sort_values("ds")
+    if fill_missing_as_zero and len(d) > 0:
+        full_idx = pd.date_range(d["ds"].min(), d["ds"].max(), freq="D")
+        d = d.set_index("ds").reindex(full_idx)
+        d.index.name = "ds"
+        d["y"] = d["y"].fillna(0.0)
+        d = d.reset_index()
+    return d
+
+# Entrena Prophet y muestra 2 gráficos + descarga para una serie
+def fit_and_plot(title: str, series_df: pd.DataFrame, key_suffix: str):
+    if len(series_df) < 10:
+        st.warning(f"Serie demasiado corta para: {title}")
+        return
+
+    df_train = series_df.copy()
+    if growth_type == "logistic":
+        cap_val = max(1.0, float(np.percentile(df_train["y"], 95) * 1.3))
+        df_train["cap"] = cap_val
+        df_train["floor"] = 0.0
+
+    m_extra = Prophet(
+        yearly_seasonality=yearly_season,
+        weekly_seasonality=weekly_season,
+        daily_seasonality=False,
+        growth=growth_type,
+        changepoint_prior_scale=changepoint_scale
+    )
+    m_extra.fit(df_train[["ds","y"] + (["cap","floor"] if growth_type == "logistic" else [])])
+
+    future = m_extra.make_future_dataframe(periods=horizon_days, freq="D", include_history=True)
+    if growth_type == "logistic":
+        future["cap"] = df_train["cap"].iloc[-1]
+        future["floor"] = 0.0
+    forecast_extra = m_extra.predict(future)
+
+    st.subheader(title)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Pronóstico")
+        st.plotly_chart(plot_plotly(m_extra, forecast_extra), use_container_width=True, key=f"plot_{key_suffix}")
+    with c2:
+        st.caption("Componentes")
+        st.plotly_chart(plot_components_plotly(m_extra, forecast_extra), use_container_width=True, key=f"comp_{key_suffix}")
+
+    export = forecast_extra.rename(columns={"ds":"fecha_venta","yhat":"pronostico","yhat_lower":"lim_inf","yhat_upper":"lim_sup"})
+    st.download_button(
+        f"⬇️ Descargar pronóstico ({title})",
+        data=export.to_csv(index=False).encode("utf-8"),
+        file_name=f"pronostico_{key_suffix}.csv",
+        mime="text/csv",
+        key=f"dl_{key_suffix}"
+    )
+
+# ---------- 1) Predicción por CATEGORÍA ----------
+if cat_col:
+    st.markdown("### Por categoría")
+    categorias = sorted(pd.Series(df_raw[cat_col].dropna().unique()).astype(str).tolist())
+    sel = st.multiselect("Elige categorías (recomendado ≤ 5)", categorias, default=categorias[:1])
+    if len(sel) > 7:
+        st.info("Has seleccionado muchas categorías; el entrenamiento puede tardar.")
+    for i, c in enumerate(sel):
+        serie_cat = build_series(df_raw, value_col, group_col=cat_col, group_val=c)
+        fit_and_plot(f"Categoría: {c}", serie_cat, key_suffix=f"cat_{i}_{c}")
+
+# ---------- 2) Predicción de RECAUDACIÓN (ingresos) TOTAL ----------
+st.markdown("### Recaudación total")
+if not rev_col and price_col:
+    # si no hay columna de recaudación, la calculamos como y * precio_unitario
+    df_raw["_tmp_recaudacion_calc"] = pd.to_numeric(df_raw[value_col], errors="coerce") * pd.to_numeric(df_raw[price_col], errors="coerce")
+    rev_col = "_tmp_recaudacion_calc"
+
+if rev_col:
+    serie_rev = build_series(df_raw, rev_col)
+    fit_and_plot("Recaudación total", serie_rev, key_suffix="recaudacion_total")
+else:
+    st.info("No se encontró columna de recaudación ni precio unitario para calcularla.")
+# =====================================================================
